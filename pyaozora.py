@@ -1,194 +1,150 @@
-from ebooklib import epub
-import requests
+import os
+import sys
+import re
 import argparse
-from bs4 import BeautifulSoup, Tag, NavigableString
+from dataclasses import dataclass
+import requests_cache
+from bs4 import BeautifulSoup
+from ebooklib import epub
 
-allowed_tags = ["a", "div", "ruby", "rb", "rp", "rt", "p", "br", "em", "h4", "h3", "h2", "h1", "h", "span"]
-def process_tag(tag):
-    for i in tag.contents:
-        if type(i) == Tag:
-            if i.name in allowed_tags:
-                process_tag(i)
-            elif i.name != None:
-                i.extract()
+def get_gaiji(s):
+    #<img src="../../../gaiji/1-88/1-88-22.png" alt="※(「王＋膠のつくり」、第3水準1-88-22)" class="gaiji" />
+    m = re.search(r'<img .+第(\d)水準\d-(\d{1,2})-(\d{1,2}).+?"/>', s)
+    if m:
+        key = f'{m[1]}-{int(m[2])+32:2X}{int(m[3])+32:2X}'
+        return gaiji_table.get(key, s)
+    #※<span class="notes">［＃丸印、U+329E、36-10］</span>
+    m = re.search(r'U\+(\w{4})', s)
+    if m:
+        return chr(int(m[1], 16))
+    # unknown format
+    return s
 
-def unruby(tag):
-    arr = tag.find_all("ruby")
-    for i in arr:
-        i.replace_with(i.rb.string)
+def sub_gaiji(text):
+    buf = re.sub(r'<img .+?"/>', lambda m: get_gaiji(m[0]), text)
+    return re.sub(r'※<span .+?span>', lambda m: get_gaiji(m[0]), buf)
 
-def sanitize_soup(soup):
-    result = soup.html.body.find_all("div", "main_text")
+@dataclass
+class BookInfo:
+    title: str
+    creator: str
+    publisher: str
+    main_text: str
+    biblio_info: str
 
-    main = result[0]
-    j = 0
-    chapters=[]
-    current_chapter = BeautifulSoup()
-    chapter_name = None
-    process_tag(main)
-    kids = list(main.children).copy()
-    for i in kids:
-        if type(i) == Tag:
-            chapter_result = i.find_all("a", "midashi_anchor")
-            if len(chapter_result) != 0:
-                unruby(chapter_result[0])
-                if chapter_name:
-                    chapters.append((chapter_name, current_chapter))
-                    current_chapter = BeautifulSoup()
-                chapter_name = "".join([str(i) for i in chapter_result[0].contents])
+def content_to_bookinfo(content):
+    soup = BeautifulSoup(content,"html.parser")
 
-        current_chapter.append(i)
-        j+=1
+    # 書誌情報を取得
+    title       = soup.find('meta', attrs={'name': 'DC.Title'}).get('content')
+    creator     = soup.find('meta', attrs={'name': 'DC.Creator'}).get('content') 
+    publisher   = soup.find('meta', attrs={'name': 'DC.Publisher'}).get('content') 
+    main_text   = soup.find("div", class_="main_text")
+    biblio_info = soup.find("div", class_="bibliographical_information")
 
-    if chapter_name:
-        chapters.append((chapter_name, current_chapter))
-        current_chapter = BeautifulSoup()
-    return chapters
+    return BookInfo(title,creator,publisher,main_text,biblio_info)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
                     prog = 'pyaozora',
                     description = 'aozoraのXHTMLリンクからEPUB3に')
-
-    parser.add_argument('url')
-    parser.add_argument('--yokogaki', '-y', action="store_true", help="横書きにする")
+    
+    parser.add_argument('url', help="青空文庫のXHTMLのURL")
     parser.add_argument('--tategaki', '-t', action="store_true", help="縦書きにする")
     parser.add_argument('--output', '-o', help="ファイルに出力")
-
     args = parser.parse_args()
 
-    page = requests.get(args.url)
+    # url確認
+    pattern = "https:\/\/www.aozora.gr.jp\/cards\/\d+\/files\/(\d+)_\d+.html"
+    match = re.match(pattern, args.url) 
+    if not match:
+        sys.exit('青空文庫のXHTMLのURLを指定してください。')
 
-    soup = BeautifulSoup(page.content, 'html5lib')
-    chapters = sanitize_soup(soup)
+    # urlからepub用のidを生成
+    id = "aozora-card-no." + match.group(1)
 
-    title = soup.find_all("meta", attrs={"name":"DC.Title"})[0]['content']
-    author = soup.find_all("meta", attrs={"name":"DC.Creator"})[0]['content']
+    # 外字ファイルの確認とロード
+    gaiji = 'jisx0213-2004-std.txt'
+    if not os.path.isfile(gaiji):
+        sys.exit('外字ファイルが見つかりません。')
+    with open(gaiji) as f:
+        ms = (re.match(r'(\d-\w{4})\s+U\+(\w{4})', l) for l in f if l[0] != '#')
+        gaiji_table = {m[1]: chr(int(m[2], 16)) for m in ms if m}
 
+    # キャッシュを aozora_cache.sqlite に保存
+    session = requests_cache.CachedSession('aozora_cache')
+    response = session.get(args.url)
+    response.encoding = response.apparent_encoding 
+    print(f'from_cache:{response.from_cache}, status_code: {response.status_code}, url: {args.url}') 
+
+    bookinfo = content_to_bookinfo(response.content)
+
+    # 電子書籍作成
     book = epub.EpubBook()
 
-    # add metadata
-    #book.set_identifier('sample123456')
-    book.set_title(title)
+    # 必須項目の設定
+    book.set_identifier(id)
+    book.set_title(bookinfo.title)
     book.set_language('ja')
 
-    book.add_author(author)
+    # オプション項目の設定
+    book.add_author(bookinfo.creator)
+    book.add_metadata('DC', 'publisher', bookinfo.publisher)
+    if args.tategaki:
+      book.set_direction("rtl")
 
-    # defube style
-    if args.yokogaki:
-        style = '''
-body {
-    word-break: normal;
-    text-align: justify;
-    text-justify: inter-ideograph;
-    vertical-align: baseline;
-    word-wrap: break-word;
-    line-break: normal;
-    -epub-line-break: normal;
-    -webkit-line-break: normal;
-}
-'''
-        book.add_metadata(None, 'meta', '', {'name': 'primary-writing-mode', 'content': 'horizontal-rl'})
-
-    if args.tategaki or (not args.tategaki and not args.yokogaki):
-        style = '''
+    # 縦書きスタイル
+    verticalstyle = '''
 html {
-    direction: rtl;
-    -ms-writing-mode: tb-rl;
-    -epub-writing-mode: vertical-rl;
+    -epub-writing-mode:   vertical-rl;
     -webkit-writing-mode: vertical-rl;
-    writing-mode: vertical-rl;
-}
-body {
-    direction: ltr;
-    word-break: normal;
-    text-align: justify;
-    text-justify: inter-ideograph;
-    vertical-align: baseline;
-    word-wrap: break-word;
-    line-break: normal;
-    -epub-line-break: normal;
-    -webkit-line-break: normal;
 }
 '''
-        book.add_metadata(None, 'meta', '', {'name': 'primary-writing-mode', 'content': 'vertical-rl'})
+    vertical_css = epub.EpubItem(file_name="style-vertical.css", media_type="text/css", content=verticalstyle)
+    book.add_item(vertical_css)
 
-    default_css = epub.EpubItem(uid="style_default", file_name="style/default.css", media_type="text/css", content=style)
-    book.add_item(default_css)
+    # 表紙
+    cover = epub.EpubHtml(title='表紙', file_name='cover.xhtml', lang='ja')
+    cover.set_content(f'<h1>{bookinfo.title}</h1><h2>{bookinfo.creator}</h2>')
+    if args.tategaki:
+      cover.add_item(vertical_css)
 
+    # 本文
+    c1 = epub.EpubHtml(title=bookinfo.title, file_name='chapter1.xhtml', lang='ja')
+    converted = []
+    lines = str(bookinfo.main_text).splitlines()
+    for line in lines:
+        converted.append(sub_gaiji(line))
+    convertedjoin = ''.join(converted)
+    c1.set_content(f'<body>{convertedjoin}</body>')
+    if args.tategaki:
+      c1.add_item(vertical_css)
 
-    c1 = epub.EpubHtml(title=title, file_name='intro.xhtml', lang='hr')
-    c1.content=f'<h1>{title}</h1><h2>{author}</h2>'
+    # 奥付
+    biblio = epub.EpubHtml(title='奥付', file_name='biblio.xhtml', lang='ja')
+    biblio.set_content(f'<body>{bookinfo.biblio_info}</body>')
+
+    # 各章を追加
+    book.add_item(cover)
     book.add_item(c1)
+    book.add_item(biblio)
+    
+    # 目次の構成
+    toc=[]  
+    toc.append(epub.Link('cover.xhtml', '表紙', 'cover'))
+    toc.append(epub.Link('chapter1.xhtml', bookinfo.title, 'chapter1'))
+    toc.append(epub.Link('biblio.xhtml', '奥付', 'biblio'))
+    book.toc = tuple(toc)
 
-    # about chapter
-    cn = []
-    for chapter in chapters:
-        c = epub.EpubHtml(title=chapter[0], file_name=f'{chapter[0]}.xhtml')
-        c.content = str(chapter[1])
-        c.set_language('hr')
-        c.properties.append('rendition:layout-pre-paginated rendition:orientation-landscape rendition:spread-none')
-        c.add_item(default_css)
-        book.add_item(c)
-        cn += [c]
-
-    # create table of contents
-    # - add manual link
-    # - add section
-    # - add auto created links to chapters
-
-    intro = chapters[0]
-    book.toc = cn
-
-    # add navigation files
+    # ePub2とePub3の目次を追加
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
 
-    # define css style
-    style = '''
-@namespace epub "http://www.idpf.org/2007/ops";
-body {
-    font-family: Cambria, Liberation Serif, Bitstream Vera Serif, Georgia, Times, Times New Roman, serif;
-}
-
-h2 {
-     text-align: left;
-     text-transform: uppercase;
-     font-weight: 200;
-}
-
-ol {
-        list-style-type: none;
-}
-
-ol > li:first-child {
-        margin-top: 0.3em;
-}
-
-
-nav[epub|type~='toc'] > ol > li > ol  {
-    list-style-type:square;
-}
-
-
-nav[epub|type~='toc'] > ol > li > ol > li {
-        margin-top: 0.3em;
-}
-
-'''
-
-    # add css file
-    nav_css = epub.EpubItem(uid="style_nav", file_name="style/nav.css", media_type="text/css", content=style)
-    book.add_item(nav_css)
-
-    # create spine
-    book.spine = ['nav', c1]
-    for chapter in cn:
-        book.spine.append(chapter)
-
+    # 構造の設定
+    book.spine = [cover, c1, biblio]
 
     # create epub file
     if args.output is None:
-        epub.write_epub(f'{title}.epub', book, {})
+        epub.write_epub(f'{bookinfo.title}.epub', book, {})
     else:
         epub.write_epub(f'{args.output}', book, {})
