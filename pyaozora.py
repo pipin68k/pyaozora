@@ -1,3 +1,7 @@
+# Copyright (C) 2024 pipin68k
+# based on code by https://github.com/ymndoseijin/pyaozora copyright (C) 2023 ymndoseijin 
+# License: GPL-3.0 license
+
 import os
 import sys
 import re
