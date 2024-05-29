@@ -40,7 +40,10 @@ def content_to_bookinfo(content):
     soup = BeautifulSoup(content,"html.parser")
 
     # 書誌情報を取得
-    title       = soup.find('meta', attrs={'name': 'DC.Title'}).get('content')
+    if soup.find('meta', attrs={'name': 'DC.Title'}):
+        title   = soup.find('meta', attrs={'name': 'DC.Title'}).get('content')
+    else:
+        title   = soup.find('h1', class_="title").get_text()
     creator     = soup.find('meta', attrs={'name': 'DC.Creator'}).get('content') 
     publisher   = soup.find('meta', attrs={'name': 'DC.Publisher'}).get('content') 
     main_text   = soup.find("div", class_="main_text")
