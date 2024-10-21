@@ -17,6 +17,11 @@ def get_gaiji(s):
     if m:
         key = f'{m[1]}-{int(m[2])+32:2X}{int(m[3])+32:2X}'
         return gaiji_table.get(key, s)
+    #<img alt="※(二の字点、1-2-22)" class="gaiji" src="../../../gaiji/1-02/1-02-22.png"/>
+    m = re.search(r'<img alt.+\d-(\d{1,2})-(\d{1,2}).+?"/>', s)
+    if m:
+        key = f'3-{int(m[1])+32:2X}{int(m[2])+32:2X}'
+        return gaiji_table.get(key, s)
     #※<span class="notes">［＃丸印、U+329E、36-10］</span>
     m = re.search(r'U\+(\w{4})', s)
     if m:
