@@ -29,9 +29,10 @@ def get_gaiji(s):
     # unknown format
     return s
 
-def sub_gaiji(text):
+def replace_substring(text):
     buf = re.sub(r'<img .+?"/>', lambda m: get_gaiji(m[0]), text)
-    return re.sub(r'※<span .+?span>', lambda m: get_gaiji(m[0]), buf)
+    buf = re.sub(r'※<span .+?span>', lambda m: get_gaiji(m[0]), buf)
+    return re.sub(r'<span class="notes">.+?span>', "", buf)
 
 @dataclass
 class BookInfo:
@@ -62,7 +63,7 @@ if __name__ == '__main__':
                     description = 'aozoraのXHTMLリンクからEPUB3に')
     
     parser.add_argument('url', help="青空文庫のXHTMLのURL")
-    parser.add_argument('--tategaki', '-t', action="store_true", help="縦書きにする")
+    parser.add_argument('--portrait', '-p', action="store_true", help="縦書きにする")
     parser.add_argument('--output', '-o', help="ファイルに出力")
     args = parser.parse_args()
 
@@ -102,7 +103,7 @@ if __name__ == '__main__':
     # オプション項目の設定
     book.add_author(bookinfo.creator)
     book.add_metadata('DC', 'publisher', bookinfo.publisher)
-    if args.tategaki:
+    if args.portrait:
       book.set_direction("rtl")
 
     # 縦書きスタイル
@@ -118,7 +119,7 @@ html {
     # 表紙
     cover = epub.EpubHtml(title='表紙', file_name='cover.xhtml', lang='ja')
     cover.set_content(f'<h1>{bookinfo.title}</h1><h2>{bookinfo.creator}</h2>')
-    if args.tategaki:
+    if args.portrait:
       cover.add_item(vertical_css)
 
     # 本文
@@ -126,10 +127,10 @@ html {
     converted = []
     lines = str(bookinfo.main_text).splitlines()
     for line in lines:
-        converted.append(sub_gaiji(line))
+        converted.append(replace_substring(line))
     convertedjoin = ''.join(converted)
     c1.set_content(f'<body>{convertedjoin}</body>')
-    if args.tategaki:
+    if args.portrait:
       c1.add_item(vertical_css)
 
     # 奥付
