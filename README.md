@@ -21,16 +21,16 @@ Invoke-WebRequest -Uri http://x0213.org/codetable/jisx0213-2004-std.txt -OutFile
 あとは、pip だけでセットアップできます。dataclass を使っているので、Python 3.7以降。
 
 ```
-pip install -r requirements.txt
+pip install -r .\requirements.txt
 ```
 
 ## 使い方
 
-`-t`が縦書きの設定です。 デフォルトは横書き。
+`-p`が縦書きの設定です。 デフォルトは横書き。
 `-o`プログラムの出力ファイルの設定です。デフォルトは `$題名.epub` です。
 
 ```
-python pyaozora -t https://www.aozora.gr.jp/cards/000096/files/2381_13352.html
+python .\pyaozora -p https://www.aozora.gr.jp/cards/000096/files/2381_13352.html
 ```
 
 ## 参照サイト
